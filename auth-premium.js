@@ -446,6 +446,169 @@ async function renderUserBadge(containerId = 'user-badge') {
 }
 
 // ============================================
+// 9. HIỂN THỊ LỚP PHỦ KHÓA NỘI DUNG
+// ============================================
+/**
+ * Hiển thị lớp phủ mờ khóa nội dung
+ * @param {string} containerId - ID của container cần phủ overlay
+ * @param {string} reason - 'not_logged_in' | 'premium_required'
+ * @param {object} options - Tùy chọn (loginUrl, upgradeUrl)
+ */
+function showLockedOverlay(containerId, reason = 'not_logged_in', options = {}) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        console.error('Container không tồn tại:', containerId);
+        return;
+    }
+
+    // Đảm bảo container có position relative
+    container.style.position = 'relative';
+
+    // Xóa overlay cũ nếu có
+    const oldOverlay = container.querySelector('.locked-overlay');
+    if (oldOverlay) oldOverlay.remove();
+
+    // Nội dung theo lý do
+    const content = {
+        'not_logged_in': {
+            icon: '🔐',
+            title: 'Nội dung dành riêng cho thành viên',
+            message: 'Vui lòng đăng nhập để sử dụng tính năng này!',
+            btnText: 'Đăng nhập ngay',
+            btnAction: options.loginUrl || '/p/dang-nhap.html',
+            btnClass: 'lo-btn-login'
+        },
+        'premium_required': {
+            icon: '⭐',
+            title: 'Nội dung dành riêng cho Premium',
+            message: 'Bạn vui lòng nâng cấp Premium để sử dụng tính năng này.',
+            btnText: 'Nâng cấp Premium',
+            btnAction: 'showUpgradeModal()',
+            btnClass: 'lo-btn-premium'
+        }
+    };
+
+    const info = content[reason] || content.not_logged_in;
+    const isLink = !info.btnAction.includes('(');
+
+    // Tạo overlay HTML
+    const overlay = document.createElement('div');
+    overlay.className = 'locked-overlay';
+    overlay.innerHTML = `
+        <style>
+            .locked-overlay {
+                position: absolute;
+                top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(5px);
+                display: flex; flex-direction: column;
+                align-items: center; justify-content: center;
+                z-index: 1000;
+                border-radius: inherit;
+                padding: 30px;
+                box-sizing: border-box;
+                text-align: center;
+            }
+            .lo-icon { font-size: 60px; margin-bottom: 20px; }
+            .lo-title { 
+                font-size: 20px; font-weight: 800; 
+                color: #1f2937; margin: 0 0 10px 0;
+            }
+            .lo-message { 
+                font-size: 15px; color: #6b7280; 
+                line-height: 1.6; margin-bottom: 25px;
+                max-width: 400px;
+            }
+            .lo-btn {
+                padding: 12px 30px; border: none; border-radius: 10px;
+                font-size: 16px; font-weight: 700; cursor: pointer;
+                transition: 0.2s; text-decoration: none;
+                display: inline-block;
+            }
+            .lo-btn-login {
+                background: linear-gradient(135deg, #3b82f6, #2563eb);
+                color: white;
+                box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+            }
+            .lo-btn-login:hover { 
+                transform: translateY(-2px); 
+                box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4); 
+            }
+            .lo-btn-premium {
+                background: linear-gradient(135deg, #f59e0b, #d97706);
+                color: white;
+                box-shadow: 0 4px 15px rgba(245, 158, 11, 0.3);
+            }
+            .lo-btn-premium:hover { 
+                transform: translateY(-2px); 
+                box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4); 
+            }
+        </style>
+        <div class="lo-icon">${info.icon}</div>
+        <h3 class="lo-title">${info.title}</h3>
+        <p class="lo-message">${info.message}</p>
+        ${isLink
+            ? `<a href="${info.btnAction}" class="lo-btn ${info.btnClass}">${info.btnText}</a>`
+            : `<button class="lo-btn ${info.btnClass}" onclick="${info.btnAction}">${info.btnText}</button>`
+        }
+    `;
+
+    container.appendChild(overlay);
+}
+
+/**
+ * Xóa lớp phủ khóa
+ * @param {string} containerId - ID của container
+ */
+function removeLockedOverlay(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const overlay = container.querySelector('.locked-overlay');
+    if (overlay) overlay.remove();
+}
+
+/**
+ * Kiểm tra và hiển thị overlay tự động
+ * @param {string} containerId - ID container cần kiểm tra
+ * @param {string} feature - 'ai' | 'vocab' | 'voice' | 'lookup'
+ * @param {object} data - Dữ liệu bổ sung (level, etc.)
+ */
+async function checkAndShowOverlay(containerId, feature = 'general', data = {}) {
+    const supaClient = window.supa || window.supabase;
+
+    if (!supaClient) {
+        console.error('Supabase chưa khởi tạo');
+        return { locked: true, reason: 'error' };
+    }
+
+    // Kiểm tra đăng nhập
+    const { data: { user } } = await supaClient.auth.getUser();
+
+    if (!user) {
+        showLockedOverlay(containerId, 'not_logged_in', data);
+        return { locked: true, reason: 'not_logged_in' };
+    }
+
+    // Đã đăng nhập → Kiểm tra Premium cho các feature cần
+    if (['vocab_n2', 'vocab_n1', 'voice', 'lookup'].includes(feature)) {
+        const { data: profile } = await supaClient
+            .from('profiles')
+            .select('subscription_type')
+            .eq('id', user.id)
+            .single();
+
+        if (!profile || profile.subscription_type !== 'premium') {
+            showLockedOverlay(containerId, 'premium_required', data);
+            return { locked: true, reason: 'premium_required' };
+        }
+    }
+
+    // Không bị khóa
+    return { locked: false };
+}
+
+// ============================================
 // EXPORT (Để có thể dùng ở mọi nơi)
 // ============================================
 console.log('✅ Auth Premium System loaded successfully!');
